@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings" // Added for path cleaning
 	"sync"
 	"time"
 )
@@ -27,9 +28,9 @@ type AgentState struct {
 
 // CheckpointRequest is used for atomic state updates.
 type CheckpointRequest struct {
-	AgentID   string                 `json:"agent_id"`
-	Version   int                    `json:"version"`   // Expected current version
-	NewState  map[string]interface{} `json:"newState"`  // The new agent-specific data
+	AgentID  string                 `json:"agent_id"`
+	Version  int                    `json:"version"`  // Expected current version
+	NewState map[string]interface{} `json:"newState"` // The new agent-specific data
 }
 
 // Global in-memory map for quick access and to manage concurrent writes.
@@ -76,8 +77,9 @@ func saveStateHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
 		return
 	}
-	if agentState.AgentID == "" {
-		http.Error(w, "Agent ID is required", http.StatusBadRequest)
+	// Validate agentState.AgentID for path traversal before use
+	if agentState.AgentID == "" || strings.Contains(agentState.AgentID, "..") || strings.Contains(agentState.AgentID, "/") {
+		http.Error(w, "Agent ID is required and must not contain path traversal characters", http.StatusBadRequest)
 		return
 	}
 
@@ -105,8 +107,9 @@ func saveStateHandler(w http.ResponseWriter, r *http.Request) {
 
 func getStateHandler(w http.ResponseWriter, r *http.Request) {
 	agentID := filepath.Base(r.URL.Path)
-	if agentID == "state" || agentID == "" { // Handle /state without ID
-		http.Error(w, "Agent ID is required in URL path", http.StatusBadRequest)
+	// Validate agentID for path traversal before use
+	if agentID == "state" || agentID == "" || strings.Contains(agentID, "..") || strings.Contains(agentID, "/") {
+		http.Error(w, "Agent ID is required in URL path and must not contain path traversal characters", http.StatusBadRequest)
 		return
 	}
 
@@ -124,8 +127,9 @@ func getStateHandler(w http.ResponseWriter, r *http.Request) {
 
 func deleteStateHandler(w http.ResponseWriter, r *http.Request) {
 	agentID := filepath.Base(r.URL.Path)
-	if agentID == "state" || agentID == "" {
-		http.Error(w, "Agent ID is required in URL path", http.StatusBadRequest)
+	// Validate agentID for path traversal before use
+	if agentID == "state" || agentID == "" || strings.Contains(agentID, "..") || strings.Contains(agentID, "/") {
+		http.Error(w, "Agent ID is required in URL path and must not contain path traversal characters", http.StatusBadRequest)
 		return
 	}
 
@@ -158,8 +162,9 @@ func checkpointHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
 		return
 	}
-	if req.AgentID == "" {
-		http.Error(w, "Agent ID is required", http.StatusBadRequest)
+	// Validate req.AgentID for path traversal before use
+	if req.AgentID == "" || strings.Contains(req.AgentID, "..") || strings.Contains(req.AgentID, "/") {
+		http.Error(w, "Agent ID is required and must not contain path traversal characters", http.StatusBadRequest)
 		return
 	}
 
@@ -194,6 +199,7 @@ func checkpointHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func stateFilePath(agentID string) string {
+	// agentID is already validated to not contain path traversal characters
 	return filepath.Join(storageDir, agentID+".json")
 }
 
@@ -234,7 +240,14 @@ func loadAllStates() error {
 			continue
 		}
 
-		filePath := filepath.Join(storageDir, file.Name())
+		// Ensure file names themselves don't imply path traversal
+		fileName := file.Name()
+		if strings.Contains(fileName, "..") || strings.Contains(fileName, "/") {
+			log.Printf("Warning: Skipping file with suspicious name: %s", fileName)
+			continue
+		}
+
+		filePath := filepath.Join(storageDir, fileName)
 		data, err := ioutil.ReadFile(filePath)
 		if err != nil {
 			log.Printf("Error reading state file %s: %v", filePath, err)
